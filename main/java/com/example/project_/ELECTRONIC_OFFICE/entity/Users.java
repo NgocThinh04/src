@@ -3,10 +3,7 @@ package com.example.project_.ELECTRONIC_OFFICE.entity;
 import jakarta.persistence.*;
 import lombok.Data;
 
-import java.time.LocalDate;
-import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
-import java.time.OffsetTime;
 import java.util.UUID;
 
 @Data
@@ -45,8 +42,18 @@ public class Users {
     @Column(name = "company_code")
     private String companyCode;
 
+    @Column(name = "status")
+    private String status;
+
+    @Column(name = "position")
+    private String position;
+
     @Column(name = "create_at")
     private OffsetDateTime createAt;
+
+    @Column(name = "update_at")
+    private OffsetDateTime updateAt;
+
     @PrePersist
     public void prePersist() {
         if (userId == null) {
@@ -55,5 +62,13 @@ public class Users {
         if (createAt == null) {
             createAt = OffsetDateTime.now();
         }
+        if (status == null) {
+            status = "ACTIVE";
+        }
     }
+    @PreUpdate
+    public void preUpdate() {
+        updateAt = OffsetDateTime.now();
+    }
+
 }

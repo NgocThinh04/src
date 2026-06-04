@@ -20,7 +20,6 @@ public class AuthController {
     final AuthService authService;
     final AdminService adminService;
     final JwtService jwtService;
-    // Endpoint đăng nhập
     @PostMapping("/login")
     public ResponseEntity<?> login(@RequestBody LoginRequest loginRequest) {
         try {
@@ -36,7 +35,6 @@ public class AuthController {
         adminService.registerAdmin(registerRequestAdmin);
         return ResponseEntity.ok("Đăng ký thành công");
     }
-    // Endpoint đăng ký
     @PostMapping("/register")
     public ResponseEntity<?> register(@RequestBody Users user) {
         try {
@@ -46,21 +44,6 @@ public class AuthController {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
     }
-    @PostMapping("/refresh-token")
-    public ResponseEntity<?> refreshToken(@RequestBody Map<String, String> request) {
-        String refreshToken = request.get("refreshToken");
-
-        try {
-            Map<String, String> response = authService.refreshToken(refreshToken);
-            return ResponseEntity.ok(response);
-        } catch (Exception e) {
-            Map<String, String> error = new HashMap<>();
-            error.put("error", e.getMessage());
-            return ResponseEntity.status(401).body(error);
-        }
-    }
-
-    // Logout endpoint
     @PostMapping("/logout")
     public ResponseEntity<?> logout(@RequestHeader("Authorization") String authorization) {
         try {
@@ -77,7 +60,20 @@ public class AuthController {
             return ResponseEntity.status(400).body(error);
         }
     }
-    // Test endpoint yêu cầu authentication
+    @PostMapping("/refresh-token")
+    public ResponseEntity<?> refreshToken(@RequestBody Map<String, String> request) {
+        String refreshToken = request.get("refreshToken");
+
+        try {
+            Map<String, String> response = authService.refreshToken(refreshToken);
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            Map<String, String> error = new HashMap<>();
+            error.put("error", e.getMessage());
+            return ResponseEntity.status(401).body(error);
+        }
+    }
+
     @GetMapping("/user-info")
     public ResponseEntity<?> getUserInfo() {
         return ResponseEntity.ok(Map.of("message", "This is protected data"));
