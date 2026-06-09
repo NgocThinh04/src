@@ -8,6 +8,7 @@ import io.jsonwebtoken.security.Keys;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.stereotype.Service;
+
 import java.security.Key;
 import java.util.Date;
 import java.util.HashMap;
@@ -35,6 +36,21 @@ public class JwtService {
         return extractClaim(token, Claims::getSubject);
     }
 
+    // THÊM: Lấy userId từ token
+    public String extractUserId(String token) {
+        return extractClaim(token, claims -> claims.get("userId", String.class));
+    }
+
+    // THÊM: Lấy companyId từ token
+    public String extractCompanyId(String token) {
+        return extractClaim(token, claims -> claims.get("companyId", String.class));
+    }
+
+    // THÊM: Lấy companyCode từ token
+    public String extractCompanyCode(String token) {
+        return extractClaim(token, claims -> claims.get("companyCode", String.class));
+    }
+
     public Date extractExpiration(String token) {
         return extractClaim(token, Claims::getExpiration);
     }
@@ -56,18 +72,24 @@ public class JwtService {
         return extractExpiration(token).before(new Date());
     }
 
-    // Tạo Access Token (ngắn hạn)
-    public String generateAccessToken(UserDetails userDetails) {
+    // SỬA: Thêm userId và companyId vào Access Token
+    public String generateAccessToken(UserDetails userDetails, String userId, String companyId, String companyCode) {
         Map<String, Object> claims = new HashMap<>();
         claims.put("type", "access");
         claims.put("roles", userDetails.getAuthorities());
+        claims.put("userId", userId);
+        claims.put("companyId", companyId);
+        claims.put("companyCode", companyCode);
         return createToken(claims, userDetails.getUsername(), ACCESS_EXPIRATION_TIME);
     }
 
-    // Tạo Refresh Token (dài hạn)
-    public String generateRefreshToken(UserDetails userDetails) {
+    // SỬA: Thêm userId và companyId vào Refresh Token
+    public String generateRefreshToken(UserDetails userDetails, String userId, String companyId, String companyCode) {
         Map<String, Object> claims = new HashMap<>();
         claims.put("type", "refresh");
+        claims.put("userId", userId);
+        claims.put("companyId", companyId);
+        claims.put("companyCode", companyCode);
         return createToken(claims, userDetails.getUsername(), REFRESH_EXPIRATION_TIME);
     }
 

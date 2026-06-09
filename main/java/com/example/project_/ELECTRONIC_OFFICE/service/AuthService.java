@@ -16,6 +16,8 @@ import org.springframework.stereotype.Service;
 import java.util.HashMap;
 import java.util.Map;
 
+
+
 @Service
 @RequiredArgsConstructor
 @Slf4j
@@ -26,7 +28,7 @@ public class AuthService {
     private final CustomUserDetailsService userDetailsService;
     private final UserRepository userRepository;
     private final RedisService redisService;
-    private PasswordEncoder passwordEncoder;
+    private final PasswordEncoder passwordEncoder;
 
     // Đăng nhập và tạo token
     public Map<String, String> login(LoginRequest loginRequest) {
@@ -44,33 +46,40 @@ public class AuthService {
         // Nếu xác thực thành công, tạo token
         UserDetails userDetails = userDetailsService.loadUserByUsername(loginRequest.getUsername());
 
-        // Tạo access token và refresh token
-        String accessToken = jwtService.generateAccessToken(userDetails);
-        String refreshToken = jwtService.generateRefreshToken(userDetails);
+        // Lấy userId và companyId
+        String userId = user.getUserId().toString();
+        String companyId = user.getCompanyId() != null ? user.getCompanyId().toString() : null;
+        String companyCode = user.getCompanyCode();
+
+        // Tạo access token và refresh token (có kèm userId và companyId)
+        String accessToken = jwtService.generateAccessToken(userDetails, userId, companyId, companyCode);
+        String refreshToken = jwtService.generateRefreshToken(userDetails, userId, companyId, companyCode);
 
         // Lưu refresh token vào Redis
         redisService.saveRefreshToken(loginRequest.getUsername(), refreshToken, jwtService.REFRESH_EXPIRATION_TIME);
 
         Map<String, String> response = new HashMap<>();
-//        response.put("accessToken", accessToken);
-        response.put("refreshToken", refreshToken);
+        response.put("user_id", userId);
         response.put("token", accessToken);
+        response.put("refreshToken", refreshToken);
         response.put("username", loginRequest.getUsername());
         response.put("role", user.getRole());
-
-        if(user.getCompanyId() != null) {
-            response.put("companyId", user.getCompanyId().toString());
+        response.put("position", user.getPosition());
+        if (companyId != null) {
+            response.put("companyId", companyId);
         }
-        if (user.getCompanyCode() != null) {
-            response.put("companyCode", user.getCompanyCode());
+        if (companyCode != null) {
+            response.put("companyCode", companyCode);
         }
         if (user.getCreateAt() != null) {
             response.put("create_at", user.getCreateAt().toString());
         }
-        response.put("address", user.getAddress());
-        response.put("number_phone", user.getNumber());
-        response.put("email", user.getEmail());
+        response.put("address", user.getAddress() != null ? user.getAddress() : "");
+        response.put("number_phone", user.getNumber() != null ? user.getNumber() : "");
+        response.put("email", user.getEmail() != null ? user.getEmail() : "");
         response.put("message", "Login successful");
+
+        log.info("User logged in successfully: {}", loginRequest.getUsername());
 
         return response;
     }
@@ -90,15 +99,23 @@ public class AuthService {
             throw new RuntimeException("Refresh token not found or mismatched");
         }
 
+        // Lấy thông tin user từ database để tạo token mới
+        Users user = userRepository.findByUserName(username)
+                .orElseThrow(() -> new RuntimeException("User not found"));
+
+        String userId = user.getUserId().toString();
+        String companyId = user.getCompanyId() != null ? user.getCompanyId().toString() : null;
+        String companyCode = user.getCompanyCode();
+
         // Tạo user details mới
         UserDetails userDetails = userDetailsService.loadUserByUsername(username);
 
-        // Tạo access token mới
-        String newAccessToken = jwtService.generateAccessToken(userDetails);
+        // Tạo access token mới (có kèm userId và companyId)
+        String newAccessToken = jwtService.generateAccessToken(userDetails, userId, companyId, companyCode);
 
         Map<String, String> response = new HashMap<>();
         response.put("accessToken", newAccessToken);
-        response.put("token", newAccessToken); // Giữ lại cho tương thích
+        response.put("token", newAccessToken);
 
         return response;
     }

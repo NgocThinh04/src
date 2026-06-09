@@ -26,4 +26,36 @@ public interface WorkflowRepository extends JpaRepository<Workflow, UUID> {
 
     boolean existsByName(String name);
     List<Workflow> findByCompanyId(UUID companyId);
+
+    // Lấy workflows active theo companyId
+    List<Workflow> findByCompanyIdAndStatusOrderByCreateAtDesc(UUID companyId, String status);
+
+    Optional<Workflow> findByCompanyIdAndNameAndStatus(UUID companyId, String name, String status);
+
+    Optional<Workflow> findByCompanyIdAndName(UUID companyId, String name);
+
+    // Tìm workflow active theo companyId và tên quy trình (requestType)
+    default Optional<Workflow> findActiveByCompanyIdAndProcessCode(UUID companyId, String processCode) {
+        return findByCompanyIdAndNameAndStatus(companyId, processCode, "ACTIVE");
+    }
+
+
+    // ✅ THÊM METHOD NÀY - Tìm tất cả workflow của công ty sắp xếp theo createAt giảm dần
+    List<Workflow> findByCompanyIdOrderByCreateAtDesc(UUID companyId);
+
+
+    // Tìm workflow đang active theo công ty
+    List<Workflow> findByCompanyIdAndStatus(UUID companyId, String status);
+
+
+
+    // Tìm workflow mới nhất theo companyId
+    @Query("SELECT w FROM Workflow w WHERE w.companyId = :companyId ORDER BY w.createAt DESC")
+    List<Workflow> findLatestByCompanyId(@Param("companyId") UUID companyId);
+
+    // Kiểm tra workflow đã tồn tại chưa
+    boolean existsByCompanyIdAndName(UUID companyId, String name);
+
+    // Đếm số workflow theo companyId
+    long countByCompanyId(UUID companyId);
 }

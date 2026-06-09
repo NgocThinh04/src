@@ -12,21 +12,69 @@ import java.util.UUID;
 
 @Repository
 public interface UserRepository extends JpaRepository<Users, UUID> {
+
+    // ==================== FIND BY BASIC FIELDS ====================
+
     Optional<Users> findByUserName(String username);
 
     Optional<Users> findByEmail(String email);
 
+    Optional<Users> findByUserId(UUID userId);
+
+
+    // ==================== FIND BY COMPANY ====================
 
     List<Users> findByCompanyId(UUID companyId);
 
     List<Users> findByCompanyIdOrderByCreateAtDesc(UUID companyId);
 
+    // ✅ THÊM METHOD NÀY - Quan trọng cho luồng duyệt
+    List<Users> findByCompanyIdAndPosition(UUID companyId, String position);
+
+    // Tìm user theo company và position và status ACTIVE
+    List<Users> findByCompanyIdAndPositionAndStatus(UUID companyId, String position, String status);
+
+
+    // ==================== FIND BY STATUS ====================
+
     List<Users> findByStatus(String status);
+
+
+    // ==================== FIND ACTIVE USERS ====================
+
+    @Query("SELECT u FROM Users u WHERE u.companyId = :companyId AND u.status = 'ACTIVE'")
+    List<Users> findActiveUsersByCompanyId(@Param("companyId") UUID companyId);
+
+    // Tìm user active theo company và position
+    @Query("SELECT u FROM Users u WHERE u.companyId = :companyId AND u.position = :position AND u.status = 'ACTIVE'")
+    List<Users> findActiveUsersByCompanyIdAndPosition(@Param("companyId") UUID companyId,
+                                                      @Param("position") String position);
+
+
+    // ==================== EXISTS CHECKS ====================
 
     boolean existsByEmail(String email);
 
     boolean existsByUserName(String userName);
 
-    @Query("SELECT u FROM Users u WHERE u.companyId = :companyId AND u.status = 'ACTIVE'")
-    List<Users> findActiveUsersByCompanyId(@Param("companyId") UUID companyId);
+
+    // ==================== FIND BY POSITION (không cần companyId) ====================
+
+    List<Users> findByPosition(String position);
+
+
+    // ==================== TÌM NGƯỜI DUYỆT THEO VAI TRÒ (cho luồng duyệt) ====================
+
+    /**
+     * Tìm tất cả user có vai trò (position) trong danh sách
+     * Dùng cho trường hợp cần lấy nhiều role cùng lúc
+     */
+    @Query("SELECT u FROM Users u WHERE u.companyId = :companyId AND u.position IN :positions AND u.status = 'ACTIVE'")
+    List<Users> findByCompanyIdAndPositions(@Param("companyId") UUID companyId,
+                                            @Param("positions") List<String> positions);
+
+    /**
+     * Đếm số lượng user theo vai trò trong công ty
+     */
+    long countByCompanyIdAndPosition(UUID companyId, String position);
 }

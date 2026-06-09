@@ -8,7 +8,6 @@ import lombok.NoArgsConstructor;
 
 import java.time.OffsetDateTime;
 import java.util.UUID;
-
 @Entity
 @Table(name = "approval_actions")
 @Data
@@ -25,32 +24,24 @@ public class ApprovalAction {
     @Column(name = "request_id", nullable = false)
     private UUID requestId;
 
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "request_id", insertable = false, updatable = false)
-    private ApprovalRequest request;
-
     @Column(name = "step_order", nullable = false)
     private Integer stepOrder;
 
     @Column(name = "step_name", nullable = false, length = 100)
-    private String stepName; // TRUONG_PHONG, GIAM_DOC, ...
+    private String stepName;
 
     @Column(name = "approver_id")
     private UUID approverId;
-
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "approver_id", insertable = false, updatable = false)
-    private Users approver;
 
     @Column(name = "approver_name", length = 255)
     private String approverName;
 
     @Column(name = "approval_type", nullable = false, length = 20)
-    private String approvalType; // SINGLE (xanh), ALL (đỏ)
+    private String approvalType;
 
     @Column(name = "action", length = 20)
     @Builder.Default
-    private String action = "PENDING"; // PENDING, APPROVED, REJECTED
+    private String action = "PENDING";
 
     @Column(name = "rejection_reason", columnDefinition = "TEXT")
     private String rejectionReason;
@@ -71,6 +62,9 @@ public class ApprovalAction {
         }
         if (createAt == null) {
             createAt = OffsetDateTime.now();
+        }
+        if (action == null) {
+            action = "PENDING";
         }
     }
 }
