@@ -52,7 +52,31 @@ public class JwtUtil {
             throw new RuntimeException("Invalid token: " + e.getMessage());
         }
     }
+    public UUID getCompanyIdFromToken(String token) {
+        try {
+            if (token.startsWith("Bearer ")) {
+                token = token.substring(7);
+            }
 
+            Claims claims = Jwts.parserBuilder()
+                    .setSigningKey(getSigningKey())
+                    .build()
+                    .parseClaimsJws(token)
+                    .getBody();
+
+            String companyId = claims.get("companyId", String.class);
+
+            if (companyId == null) {
+                throw new RuntimeException("Company ID not found in token");
+            }
+
+            return UUID.fromString(companyId);
+        } catch (IllegalArgumentException e) {
+            throw new RuntimeException("Invalid UUID format: " + e.getMessage());
+        } catch (Exception e) {
+            throw new RuntimeException("Invalid token: " + e.getMessage());
+        }
+    }
     /**
      * Giải mã token và lấy toàn bộ claims
      */

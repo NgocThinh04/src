@@ -1,6 +1,7 @@
 package com.example.project_.ELECTRONIC_OFFICE.repository.user;
 
 import com.example.project_.ELECTRONIC_OFFICE.entity.ApprovalAction;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -43,5 +44,6 @@ public interface ApprovalActionRepository extends JpaRepository<ApprovalAction, 
 
     @Query("SELECT COALESCE(MAX(a.stepOrder), 0) FROM ApprovalAction a WHERE a.requestId = :requestId")
     Integer findMaxStepOrderByRequestId(@Param("requestId") UUID requestId);
-
+    @Query("SELECT a FROM ApprovalAction a WHERE a.requestId IN :requestIds AND a.actionStatus = 'COMPLETED' ORDER BY a.approvedAt DESC")
+    List<ApprovalAction> findTop10ByRequestIdInOrderByApprovedAtDesc(@Param("requestIds") List<UUID> requestIds, Pageable pageable);
 }

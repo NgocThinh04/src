@@ -1,6 +1,7 @@
 package com.example.project_.ELECTRONIC_OFFICE.repository.user;
 
 import com.example.project_.ELECTRONIC_OFFICE.entity.ApprovalRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -71,4 +72,19 @@ public interface ApprovalRequestRepository extends JpaRepository<ApprovalRequest
             "WHERE aa.approverId = :approverId " +
             "ORDER BY ar.createdAt DESC")
     List<ApprovalRequest> findByApproverId(@Param("approverId") UUID approverId);
+
+    @Query("SELECT COUNT(r) FROM ApprovalRequest r WHERE r.companyId = :companyId")
+    Long countByCompanyId(@Param("companyId") UUID companyId);
+
+    @Query("SELECT COUNT(r) FROM ApprovalRequest r WHERE r.companyId = :companyId AND r.status = 'PENDING'")
+    Long countPendingByCompanyId(@Param("companyId") UUID companyId);
+
+    @Query("SELECT COUNT(r) FROM ApprovalRequest r WHERE r.companyId = :companyId AND r.status = 'APPROVED'")
+    Long countApprovedByCompanyId(@Param("companyId") UUID companyId);
+
+    @Query("SELECT COUNT(r) FROM ApprovalRequest r WHERE r.companyId = :companyId AND r.status = 'REJECTED'")
+    Long countRejectedByCompanyId(@Param("companyId") UUID companyId);
+
+    @Query("SELECT r FROM ApprovalRequest r WHERE r.companyId = :companyId ORDER BY r.createdAt DESC")
+    List<ApprovalRequest> findTop10ByCompanyIdOrderByCreatedAtDesc(@Param("companyId") UUID companyId, Pageable pageable);
 }
