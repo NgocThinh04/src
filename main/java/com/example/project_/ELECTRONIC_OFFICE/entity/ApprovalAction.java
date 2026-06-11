@@ -54,7 +54,15 @@ public class ApprovalAction {
 
     @Column(name = "created_at", updatable = false)
     private OffsetDateTime createAt;
+    @Column(name = "node_id", length = 100)
+    private String nodeId;
 
+    @Column(name = "possible_actions", length = 255)
+    private String possibleActions; // Lưu "Đồng ý,Từ chối"
+
+    @Column(name = "action_status", length = 20)
+    @Builder.Default
+    private String actionStatus = "PENDING";
     @PrePersist
     public void prePersist() {
         if (id == null) {

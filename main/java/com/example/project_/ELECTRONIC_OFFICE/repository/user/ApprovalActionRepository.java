@@ -40,4 +40,8 @@ public interface ApprovalActionRepository extends JpaRepository<ApprovalAction, 
 
     // Kiểm tra xem user đã duyệt ở bước nào chưa
     boolean existsByRequestIdAndApproverIdAndStepOrder(UUID requestId, UUID approverId, Integer stepOrder);
+
+    @Query("SELECT COALESCE(MAX(a.stepOrder), 0) FROM ApprovalAction a WHERE a.requestId = :requestId")
+    Integer findMaxStepOrderByRequestId(@Param("requestId") UUID requestId);
+
 }

@@ -2,7 +2,9 @@ package com.example.project_.ELECTRONIC_OFFICE.controller.user;
 
 import com.example.project_.ELECTRONIC_OFFICE.dto.request.ApprovalActionRequestDTO;
 import com.example.project_.ELECTRONIC_OFFICE.dto.request.ApprovalRequestDTO;
+import com.example.project_.ELECTRONIC_OFFICE.dto.request.UpdateApprovalRequestDTO;
 import com.example.project_.ELECTRONIC_OFFICE.dto.response.ApprovalResponseDTO;
+import com.example.project_.ELECTRONIC_OFFICE.entity.ApprovalRequest;
 import com.example.project_.ELECTRONIC_OFFICE.entity.Workflow;
 import com.example.project_.ELECTRONIC_OFFICE.service.user.ApprovalWorkflowService;
 import com.example.project_.ELECTRONIC_OFFICE.util.JwtUtil;
@@ -68,13 +70,17 @@ public class ApprovalController {
      */
     @PostMapping("/process")
     public ResponseEntity<?> processApproval(@RequestBody ApprovalActionRequestDTO requestDTO,
-                                             @RequestHeader("X-User-Id") String userId) {
-        log.info("POST /api/approvals/process - userId: {}, actionId: {}, action: {}",
-                userId, requestDTO.getActionId(), requestDTO.getAction());
+                                             @RequestHeader("Authorization") String authHeader) {
+        log.info("POST /api/approvals/process - actionId: {}, action: {}",
+                requestDTO.getActionId(), requestDTO.getAction());
 
         try {
-            UUID userUuid = UUID.fromString(userId);
-            Map<String, Object> result = approvalWorkflowService.processApproval(userUuid, requestDTO);
+            // Lấy userId từ token thay vì header X-User-Id
+            String token = authHeader.substring(7);
+            UUID userId = jwtUtil.getUserIdFromToken(token);
+            log.info("User ID from token: {}", userId);
+
+            Map<String, Object> result = approvalWorkflowService.processApproval(userId, requestDTO);
             return ResponseEntity.ok(result);
 
         } catch (IllegalArgumentException e) {
@@ -125,15 +131,14 @@ public class ApprovalController {
      * Lấy chi tiết một yêu cầu
      * GET /api/approvals/{requestId}?userId={userId}
      */
-    @GetMapping("/{requestId}")
+    @GetMapping("/requests/{requestId}")
     public ResponseEntity<?> getRequestDetail(@PathVariable String requestId,
-                                              @RequestParam String userId) {
-        log.info("GET /api/approvals/{} - userId: {}", requestId, userId);
-
+                                              @RequestHeader("Authorization") String authHeader) {
         try {
             UUID requestUuid = UUID.fromString(requestId);
-            UUID userUuid = UUID.fromString(userId);
-            ApprovalResponseDTO request = approvalWorkflowService.getRequestDetail(requestUuid, userUuid);
+            UUID userId = jwtUtil.getUserIdFromToken(authHeader);
+            log.info("GET /api/approvals/{} - userId: {}", requestId, userId);
+            ApprovalResponseDTO request = approvalWorkflowService.getRequestDetail(requestUuid, userId);
             return ResponseEntity.ok(request);
 
         } catch (IllegalArgumentException e) {
@@ -159,19 +164,15 @@ public class ApprovalController {
      * GET /api/approvals/my-requests?requesterId={requesterId}
      */
     @GetMapping("/my-requests")
-    public ResponseEntity<?> getMyRequests(@RequestParam String requesterId) {
-        log.info("GET /api/approvals/my-requests - requesterId: {}", requesterId);
+    public ResponseEntity<?> getMyRequests(@RequestHeader("Authorization") String authHeader) {
+        log.info("GET /api/approvals/my-requests");
 
         try {
-            UUID requesterUuid = UUID.fromString(requesterId);
-            List<ApprovalResponseDTO> myRequests = approvalWorkflowService.getMyRequests(requesterUuid);
+            UUID userId = jwtUtil.getUserIdFromToken(authHeader);
+
+            List<ApprovalResponseDTO> myRequests = approvalWorkflowService.getMyRequests(userId);
             return ResponseEntity.ok(myRequests);
 
-        } catch (IllegalArgumentException e) {
-            log.error("Invalid UUID format: {}", e.getMessage());
-            Map<String, String> error = new HashMap<>();
-            error.put("error", "Dữ liệu không hợp lệ");
-            return ResponseEntity.badRequest().body(error);
         } catch (Exception e) {
             log.error("Error getting my requests: {}", e.getMessage());
             Map<String, String> error = new HashMap<>();
@@ -263,6 +264,52 @@ public class ApprovalController {
             return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
         } catch (Exception e) {
             log.error("Error getting active workflow: {}", e.getMessage());
+            Map<String, String> error = new HashMap<>();
+            error.put("error", e.getMessage());
+            return ResponseEntity.badRequest().body(error);
+        }
+    }
+    @PutMapping("/requests/{requestId}")
+    public ResponseEntity<?> updateRequest(
+            @PathVariable String requestId,
+            @RequestBody UpdateApprovalRequestDTO updateDTO,
+            @RequestHeader("Authorization") String authHeader) {
+
+        log.info("PUT /api/approvals/requests/{}", requestId);
+
+        try {
+            UUID userId = jwtUtil.getUserIdFromToken(authHeader);
+
+            // Kiểm tra user có phải người gửi không
+            ApprovalRequest request = approvalWorkflowService.getRequestById(UUID.fromString(requestId));
+            if (!request.getRequesterId().equals(userId)) {
+                Map<String, String> error = new HashMap<>();
+                error.put("error", "Bạn không có quyền chỉnh sửa yêu cầu này");
+                return ResponseEntity.status(403).body(error);
+            }
+
+            // Kiểm tra status phải là REQUEST_CHANGES
+            if (!"REQUEST_CHANGES".equals(request.getStatus())) {
+                Map<String, String> error = new HashMap<>();
+                error.put("error", "Chỉ có thể chỉnh sửa yêu cầu khi đang ở trạng thái yêu cầu chỉnh sửa");
+                return ResponseEntity.badRequest().body(error);
+            }
+
+            // Cập nhật yêu cầu
+            ApprovalResponseDTO updatedRequest = approvalWorkflowService.updateRequest(
+                    UUID.fromString(requestId),
+                    updateDTO
+            );
+
+            return ResponseEntity.ok(updatedRequest);
+
+        } catch (IllegalArgumentException e) {
+            log.error("Invalid UUID format: {}", e.getMessage());
+            Map<String, String> error = new HashMap<>();
+            error.put("error", "Dữ liệu không hợp lệ");
+            return ResponseEntity.badRequest().body(error);
+        } catch (Exception e) {
+            log.error("Error updating request: {}", e.getMessage());
             Map<String, String> error = new HashMap<>();
             error.put("error", e.getMessage());
             return ResponseEntity.badRequest().body(error);

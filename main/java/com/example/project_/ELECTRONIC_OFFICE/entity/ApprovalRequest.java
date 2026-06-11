@@ -55,7 +55,18 @@ public class ApprovalRequest {
 
     @Column(name = "updated_at")
     private OffsetDateTime updatedAt;
+    @Column(name = "workflow_id")
+    private UUID workflowId;
 
+    @Column(name = "current_step_order")
+    private Integer currentStepOrder;
+
+    @Column(name = "workflow_status", length = 20)
+    @Builder.Default
+    private String workflowStatus = "IN_PROGRESS"; // IN_PROGRESS, COMPLETED, REJECTED
+
+    @Column(name = "current_node_id", length = 100)
+    private String currentNodeId;
     @PrePersist
     public void prePersist() {
         if (id == null) {
