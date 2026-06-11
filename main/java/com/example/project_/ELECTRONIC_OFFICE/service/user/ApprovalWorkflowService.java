@@ -72,26 +72,16 @@ public class ApprovalWorkflowService {
         if (jsonStr == null || jsonStr.isEmpty()) {
             return "[]";
         }
-
         String cleaned = jsonStr;
-
-        // Loại bỏ quotes ở đầu và cuối nếu có
         if (cleaned.startsWith("\"") && cleaned.endsWith("\"")) {
             cleaned = cleaned.substring(1, cleaned.length() - 1);
-            log.debug("Removed surrounding quotes");
         }
-
-        // Giải mã escape characters
         if (cleaned.contains("\\\"")) {
             cleaned = cleaned.replace("\\\"", "\"");
-            log.debug("Replaced escaped quotes");
         }
-
         if (cleaned.contains("\\\\")) {
             cleaned = cleaned.replace("\\\\", "\\");
-            log.debug("Replaced escaped backslashes");
         }
-
         return cleaned;
     }
 
@@ -107,8 +97,9 @@ public class ApprovalWorkflowService {
             nodeMap.put(node.get("id").asText(), node);
         }
 
-        // Build edges map
-        Map<String, List<EdgeInfo>> edgesMap = new HashMap<>();
+        Map<String, List<EdgeInfo>> outgoingEdgesMap = new HashMap<>();
+        Map<String, List<EdgeInfo>> incomingEdgesMap = new HashMap<>();
+
         for (JsonNode edge : edges) {
             String source = edge.get("source").asText();
             String target = edge.get("target").asText();
@@ -131,146 +122,123 @@ public class ApprovalWorkflowService {
                     .label(label)
                     .build();
 
-            edgesMap.computeIfAbsent(source, k -> new ArrayList<>()).add(edgeInfo);
-            log.debug("Added edge: {} -> {} [type={}]", source, target, edgeType);
+            outgoingEdgesMap.computeIfAbsent(source, k -> new ArrayList<>()).add(edgeInfo);
+            incomingEdgesMap.computeIfAbsent(target, k -> new ArrayList<>()).add(edgeInfo);
         }
 
-        // Log all edges
         log.info("=== ALL EDGES ===");
-        for (Map.Entry<String, List<EdgeInfo>> entry : edgesMap.entrySet()) {
+        for (Map.Entry<String, List<EdgeInfo>> entry : outgoingEdgesMap.entrySet()) {
             for (EdgeInfo ei : entry.getValue()) {
-                log.info("Edge: {} -> {} [{}]", entry.getKey(), ei.getTarget(), ei.getEdgeType());
+                log.info("Edge: {} -> {} [type={}]", entry.getKey(), ei.getTarget(), ei.getEdgeType());
             }
         }
 
-        // Find START node
         String startNodeId = findStartNodeId(nodes);
         if (startNodeId == null) {
             throw new RuntimeException("Không tìm thấy node START");
         }
         log.info("START node: {}", startNodeId);
 
-        // Traverse workflow
-        String currentNodeId = startNodeId;
-        int stepOrder = 1;
+        // BFS để duyệt workflow và tính toán stepOrder
+        Map<String, Integer> nodeToStepOrder = new HashMap<>();
+        Map<String, String> nodeToNextNode = new HashMap<>();
+        Map<Integer, List<WorkflowStep>> stepsByOrder = new HashMap<>();
         Set<String> visited = new HashSet<>();
-        int maxDepth = 50;
-        int currentDepth = 0;
+        Queue<String> queue = new LinkedList<>();
 
-        while (currentNodeId != null && currentDepth++ < maxDepth) {
-            if (visited.contains(currentNodeId)) {
-                log.warn("Loop detected at node: {}", currentNodeId);
-                break;
-            }
+        queue.add(startNodeId);
+        nodeToStepOrder.put(startNodeId, 0);
+
+        while (!queue.isEmpty()) {
+            String currentNodeId = queue.poll();
+            int currentStepOrder = nodeToStepOrder.get(currentNodeId);
             visited.add(currentNodeId);
 
             JsonNode currentNode = nodeMap.get(currentNodeId);
-            if (currentNode == null) break;
+            if (currentNode == null) continue;
 
             JsonNode data = currentNode.get("data");
             String nodeType = data.get("label").asText();
             String assignedRole = data.has("assignedRole") ? data.get("assignedRole").asText() : "";
-            log.info("Processing: id={}, type={}, role={}", currentNodeId, nodeType, assignedRole);
 
-            // XỬ LÝ APPROVAL NODE
-            if ("APPROVAL".equals(nodeType)) {
-                List<EdgeInfo> outgoingEdges = edgesMap.get(currentNodeId);
-                String nextNodeId = null;
+            // Nếu là APPROVAL node hoặc END node có role
+            if ("APPROVAL".equals(nodeType) || ("END".equals(nodeType) && assignedRole != null && !assignedRole.isEmpty())) {
+                boolean isEndNode = "END".equals(nodeType);
+
+                // Lấy possibleActions từ incoming edges
                 List<String> possibleActions = new ArrayList<>();
-
-                if (outgoingEdges != null && !outgoingEdges.isEmpty()) {
-                    for (EdgeInfo ei : outgoingEdges) {
-                        possibleActions.add(ei.getEdgeType());
-                        if ("conditional".equals(ei.getEdgeType()) && nextNodeId == null) {
-                            nextNodeId = ei.getTarget();
+                List<EdgeInfo> incomingEdges = incomingEdgesMap.get(currentNodeId);
+                if (incomingEdges != null && !incomingEdges.isEmpty()) {
+                    for (EdgeInfo ei : incomingEdges) {
+                        String edgeType = ei.getEdgeType();
+                        if ("conditional".equals(edgeType)) {
+                            possibleActions.add("Đồng ý");
+                        } else if ("parallel".equals(edgeType)) {
+                            possibleActions.add("Đồng ý (Song song)");
+                        } else if ("reject".equals(edgeType)) {
+                            possibleActions.add("Từ chối");
                         }
                     }
-                    log.info("Outgoing edges: {}, nextNodeId: {}", possibleActions, nextNodeId);
+                }
+                if (possibleActions.isEmpty()) {
+                    possibleActions.add("Đồng ý");
+                    possibleActions.add("Từ chối");
                 }
 
-                String action = approvalActions != null ? approvalActions.get(currentNodeId) : null;
-                ApprovalDetail detail = approvalDetails != null ? approvalDetails.get(currentNodeId) : null;
+                // Lấy node tiếp theo
+                String nextNodeId = null;
+                List<EdgeInfo> outgoingEdges = outgoingEdgesMap.get(currentNodeId);
+                if (outgoingEdges != null && !outgoingEdges.isEmpty()) {
+                    nextNodeId = outgoingEdges.get(0).getTarget();
+                    nodeToNextNode.put(currentNodeId, nextNodeId);
+                }
 
                 WorkflowStep step = WorkflowStep.builder()
-                        .stepOrder(stepOrder)
+                        .stepOrder(currentStepOrder)
                         .stepName(assignedRole)
                         .assignedRole(assignedRole)
                         .approvalType("SINGLE")
                         .nodeId(currentNodeId)
                         .nextNodeIfConditional(nextNodeId)
                         .possibleActions(possibleActions)
-                        .isEndStep(false)
-                        .waitingForAction(action == null)
-                        .approved(action != null && "APPROVED".equals(action))
-                        .status(action == null ? StepStatus.PENDING :
-                                ("APPROVED".equals(action) ? StepStatus.APPROVED : StepStatus.REJECTED))
+                        .isEndStep(isEndNode)
+                        .waitingForAction(true)
+                        .status(StepStatus.PENDING)
                         .build();
 
-                steps.add(step);
-                log.info("Step {}: role={}, nodeId={}, waiting={}", stepOrder, assignedRole, currentNodeId, action == null);
-
-                if (action == null) {
-                    log.info("⏸️ Stopping at pending step: {}", assignedRole);
-                    break;
-                } else {
-                    log.info("✅ Step {} completed, moving to next", stepOrder);
-                    currentNodeId = nextNodeId;
-                    stepOrder++;
-                }
-                continue;
+                stepsByOrder.computeIfAbsent(currentStepOrder, k -> new ArrayList<>()).add(step);
+                log.info("Step {}: role={}, nodeId={}, isEndStep={}, possibleActions={}",
+                        currentStepOrder, assignedRole, currentNodeId, isEndNode, possibleActions);
             }
 
-            // XỬ LÝ END NODE (có role) - LƯU Ý: lưu nextNodeId = null để biết là bước cuối
-            if ("END".equals(nodeType) && assignedRole != null && !assignedRole.isEmpty()) {
-                log.info("📍 Processing END node with role: {}", assignedRole);
-
-                String action = approvalActions != null ? approvalActions.get(currentNodeId) : null;
-
-                WorkflowStep step = WorkflowStep.builder()
-                        .stepOrder(stepOrder)
-                        .stepName(assignedRole)
-                        .assignedRole(assignedRole)
-                        .approvalType("SINGLE")
-                        .nodeId(currentNodeId)
-                        .nextNodeIfConditional(null)
-                        .isEndStep(true)
-                        .waitingForAction(action == null)
-                        .approved(action != null && "APPROVED".equals(action))
-                        .status(action == null ? StepStatus.PENDING :
-                                ("APPROVED".equals(action) ? StepStatus.APPROVED : StepStatus.REJECTED))
-                        .build();
-
-                steps.add(step);
-                log.info("Step {}: END node role={}, waiting={}", stepOrder, assignedRole, action == null);
-
-                if (action == null) {
-                    log.info("⏸️ Stopping at END node step: {}", assignedRole);
-                } else {
-                    log.info("🏁 END node approved, workflow completed");
-                }
-                break;
-            }
-
-            // XỬ LÝ START - chuyển đến node đầu tiên
-            if ("START".equals(nodeType)) {
-                List<EdgeInfo> outgoing = edgesMap.get(currentNodeId);
-                if (outgoing != null && !outgoing.isEmpty()) {
-                    String nextId = outgoing.get(0).getTarget();
-                    log.info("START -> next: {}", nextId);
-                    currentNodeId = nextId;
-                    continue;
+            // Thêm các node con vào queue
+            List<EdgeInfo> outgoingEdges = outgoingEdgesMap.get(currentNodeId);
+            if (outgoingEdges != null) {
+                for (EdgeInfo ei : outgoingEdges) {
+                    String targetId = ei.getTarget();
+                    if (!visited.contains(targetId) && !nodeToStepOrder.containsKey(targetId)) {
+                        nodeToStepOrder.put(targetId, currentStepOrder + 1);
+                        queue.add(targetId);
+                    }
                 }
             }
+        }
 
-            break;
+        // Gom các steps theo đúng thứ tự stepOrder (từ 1 đến max)
+        for (int i = 1; i <= stepsByOrder.size(); i++) {
+            if (stepsByOrder.containsKey(i)) {
+                steps.addAll(stepsByOrder.get(i));
+            }
         }
 
         log.info("Total steps parsed: {}", steps.size());
         for (WorkflowStep s : steps) {
-            log.info("  Step {}: role={}, nodeId={}, isEndStep={}", s.getStepOrder(), s.getStepName(), s.getNodeId(), s.isEndStep());
+            log.info("  Step {}: role={}, nodeId={}, isEndStep={}, possibleActions={}",
+                    s.getStepOrder(), s.getStepName(), s.getNodeId(), s.isEndStep(), s.getPossibleActions());
         }
         return steps;
     }
+
     private String findStartNodeId(JsonNode nodes) {
         for (JsonNode node : nodes) {
             JsonNode data = node.get("data");
@@ -290,16 +258,7 @@ public class ApprovalWorkflowService {
         if (roleName == null || roleName.trim().isEmpty()) {
             return "UNKNOWN";
         }
-        // Giữ nguyên tên role để tìm trong database users.position
         return roleName;
-    }
-
-    private String findNextNodeByEdgeType(List<EdgeInfo> edges, String edgeType) {
-        return edges.stream()
-                .filter(e -> edgeType.equals(e.getEdgeType()))
-                .map(EdgeInfo::getTarget)
-                .findFirst()
-                .orElse(null);
     }
 
     // ==================== CONVERTERS ====================
@@ -394,10 +353,6 @@ public class ApprovalWorkflowService {
             String nodesStr = cleanJsonString(workflow.getNodes());
             String edgesStr = cleanJsonString(workflow.getEdges());
 
-            log.info("=== WORKFLOW DATA ===");
-            log.info("Nodes: {}", nodesStr);
-            log.info("Edges: {}", edgesStr);
-
             JsonNode nodes = objectMapper.readTree(nodesStr);
             JsonNode edges = objectMapper.readTree(edgesStr);
 
@@ -408,8 +363,8 @@ public class ApprovalWorkflowService {
 
             log.info("=== STEPS PARSED ===");
             for (WorkflowStep step : steps) {
-                log.info("Step {}: role={}, nodeId={}, waiting={}, isEndStep={}",
-                        step.getStepOrder(), step.getStepName(), step.getNodeId(), step.isWaitingForAction(), step.isEndStep());
+                log.info("Step {}: role={}, nodeId={}, isEndStep={}",
+                        step.getStepOrder(), step.getStepName(), step.getNodeId(), step.isEndStep());
             }
 
             if (steps.isEmpty()) {
@@ -433,53 +388,42 @@ public class ApprovalWorkflowService {
             request = requestRepository.save(request);
             log.info("✅ Approval request saved: id={}, code={}", request.getId(), request.getRequestCode());
 
-            // Lấy step đầu tiên (stepOrder = 1)
-            List<WorkflowStep> firstSteps = steps.stream()
+            // CHỈ tạo action cho step 1 (các node đầu tiên)
+            List<WorkflowStep> step1Steps = steps.stream()
                     .filter(s -> s.getStepOrder() == 1)
                     .collect(Collectors.toList());
 
             List<ApprovalAction> actions = new ArrayList<>();
-            for (WorkflowStep step : firstSteps) {
+            for (WorkflowStep step : step1Steps) {
                 List<Users> approvers = getApproversByRole(companyId, step.getStepName());
-                if (approvers.isEmpty()) {
-                    log.warn("⚠️ No approver for role: {}", step.getStepName());
-                    // Tạo action với approverId = null
+                String possibleActionsStr = step.getPossibleActions() != null
+                        ? String.join(",", step.getPossibleActions())
+                        : "Đồng ý,Từ chối";
+
+                for (Users approver : approvers) {
                     ApprovalAction action = ApprovalAction.builder()
                             .requestId(request.getId())
                             .stepOrder(step.getStepOrder())
                             .stepName(step.getStepName())
+                            .approverId(approver.getUserId())
+                            .approverName(approver.getName())
                             .approvalType(step.getApprovalType())
                             .action("PENDING")
                             .actionStatus("PENDING")
                             .nodeId(step.getNodeId())
-                            .possibleActions(String.join(",", step.getPossibleActions()))
+                            .possibleActions(possibleActionsStr)
                             .build();
                     actions.add(action);
-                } else {
-                    for (Users approver : approvers) {
-                        ApprovalAction action = ApprovalAction.builder()
-                                .requestId(request.getId())
-                                .stepOrder(step.getStepOrder())
-                                .stepName(step.getStepName())
-                                .approverId(approver.getUserId())
-                                .approverName(approver.getName())
-                                .approvalType(step.getApprovalType())
-                                .action("PENDING")
-                                .actionStatus("PENDING")
-                                .nodeId(step.getNodeId())
-                                .possibleActions(String.join(",", step.getPossibleActions()))
-                                .build();
-                        actions.add(action);
-                        log.info("✅ Created action for step {}: approver={}", step.getStepOrder(), approver.getName());
-                    }
+                    log.info("✅ Created action for step {}: role={}, approver={}",
+                            step.getStepOrder(), step.getStepName(), approver.getName());
                 }
             }
 
             actionRepository.saveAll(actions);
-            log.info("✅ Saved {} approval actions", actions.size());
+            log.info("✅ Saved {} approval actions for step 1", actions.size());
 
-            if (!firstSteps.isEmpty()) {
-                request.setCurrentNodeId(firstSteps.get(0).getNodeId());
+            if (!step1Steps.isEmpty()) {
+                request.setCurrentNodeId(step1Steps.get(0).getNodeId());
                 requestRepository.save(request);
             }
 
@@ -511,7 +455,6 @@ public class ApprovalWorkflowService {
         Users currentUser = userRepository.findById(userId)
                 .orElseThrow(() -> new RuntimeException("Không tìm thấy người dùng"));
 
-        // Kiểm tra quyền
         List<Users> allowedApprovers = getApproversByRole(request.getCompanyId(), action.getStepName());
         boolean isAllowed = allowedApprovers.stream().anyMatch(u -> u.getUserId().equals(userId));
 
@@ -522,7 +465,6 @@ public class ApprovalWorkflowService {
         Workflow workflow = workflowRepository.findById(request.getWorkflowId())
                 .orElseThrow(() -> new RuntimeException("Không tìm thấy workflow"));
 
-        // Cập nhật action
         action.setApproverId(userId);
         action.setApproverName(currentUser.getName());
         action.setAction(requestDTO.getAction());
@@ -539,7 +481,6 @@ public class ApprovalWorkflowService {
         actionRepository.save(action);
         log.info("✅ Action {} updated with status: {}", action.getId(), requestDTO.getAction());
 
-        // Xử lý theo action
         if ("REJECTED".equals(requestDTO.getAction())) {
             request.setStatus("REJECTED");
             request.setWorkflowStatus("REJECTED");
@@ -554,14 +495,10 @@ public class ApprovalWorkflowService {
                     "requestId", request.getId()
             );
         } else if ("REQUEST_CHANGES".equals(requestDTO.getAction())) {
-            // XỬ LÝ REQUEST_CHANGES: KHÔNG CHUYỂN TIẾP, chỉ cập nhật status
             request.setStatus("REQUEST_CHANGES");
             request.setWorkflowStatus("REQUEST_CHANGES");
             request.setUpdatedAt(OffsetDateTime.now());
-
             requestRepository.save(request);
-
-            // Hủy tất cả các action đang PENDING khác
             cancelPendingActions(request.getId());
 
             return Map.of(
@@ -571,13 +508,13 @@ public class ApprovalWorkflowService {
                     "changeRequestNote", action.getRejectionReason()
             );
         } else {
-            // XỬ LÝ APPROVED - tìm bước tiếp theo
             return handleApprovalAndMoveToNext(action, request, workflow);
         }
     }
 
     /**
      * Xử lý khi duyệt và chuyển sang bước tiếp theo
+     * QUAN TRỌNG: Loại kết nối được xác định từ INCOMING edge (từ node cha)
      */
     private Map<String, Object> handleApprovalAndMoveToNext(ApprovalAction currentAction, ApprovalRequest request, Workflow workflow) {
         UUID requestId = currentAction.getRequestId();
@@ -588,44 +525,94 @@ public class ApprovalWorkflowService {
         log.info("Current nodeId: {}, stepOrder: {}", currentNodeId, currentStepOrder);
 
         try {
-            // Lấy và clean JSON string
             String edgesRaw = workflow.getEdges();
             String nodesRaw = workflow.getNodes();
 
-            log.info("Raw edges: {}", edgesRaw);
-
-            // CLEAN JSON STRING - QUAN TRỌNG
             String edgesStr = cleanJsonString(edgesRaw);
             String nodesStr = cleanJsonString(nodesRaw);
-
-            log.info("Cleaned edges: {}", edgesStr);
 
             JsonNode nodes = objectMapper.readTree(nodesStr);
             JsonNode edges = objectMapper.readTree(edgesStr);
 
             log.info("Parsed - nodes count: {}, edges count: {}", nodes.size(), edges.size());
 
-            // Log tất cả edges
-            log.info("=== ALL EDGES FROM WORKFLOW ===");
-            for (int i = 0; i < edges.size(); i++) {
-                JsonNode edge = edges.get(i);
-                String source = edge.get("source").asText();
-                String target = edge.get("target").asText();
-                String edgeType = "unknown";
-                if (edge.has("data") && edge.get("data").has("type")) {
-                    edgeType = edge.get("data").get("type").asText();
-                }
-                log.info("Edge {}: {} -> {} [type={}]", i, source, target, edgeType);
+            // === QUAN TRỌNG: LẤY LOẠI KẾT NỐI TỪ INCOMING EDGE (từ node cha) ===
+            String incomingConnectionType = getIncomingConnectionType(currentNodeId, edges);
+            log.info("Incoming connection type to node {}: {}", currentNodeId, incomingConnectionType);
+
+            // === LẤY TẤT CẢ ACTIONS CÙNG STEP ORDER ===
+            List<ApprovalAction> sameStepActions = actionRepository.findByRequestIdAndStepOrder(requestId, currentStepOrder);
+            log.info("Same step actions count: {}", sameStepActions.size());
+
+            for (ApprovalAction a : sameStepActions) {
+                log.info("  Action: stepOrder={}, stepName={}, action={}, approverName={}",
+                        a.getStepOrder(), a.getStepName(), a.getAction(), a.getApproverName());
             }
 
-            // Tìm node tiếp theo
+            long totalCount = sameStepActions.size();
+            long approvedCount = sameStepActions.stream()
+                    .filter(a -> "APPROVED".equals(a.getAction()))
+                    .count();
+
+            List<String> approvedNames = sameStepActions.stream()
+                    .filter(a -> "APPROVED".equals(a.getAction()))
+                    .map(ApprovalAction::getApproverName)
+                    .filter(Objects::nonNull)
+                    .collect(Collectors.toList());
+
+            List<String> pendingNames = sameStepActions.stream()
+                    .filter(a -> "PENDING".equals(a.getAction()))
+                    .map(ApprovalAction::getStepName)
+                    .collect(Collectors.toList());
+
+            boolean isStepCompleted = false;
+
+            // Dựa vào incoming connection type để quyết định
+            if ("parallel".equals(incomingConnectionType)) {
+                // Parallel: chỉ cần 1 người duyệt là đủ
+                isStepCompleted = approvedCount >= 1;
+                log.info("Parallel mode (incoming) - Approved: {}/{}, Completed: {}", approvedCount, totalCount, isStepCompleted);
+
+                if (!isStepCompleted) {
+                    return Map.of(
+                            "message", "Đã ghi nhận duyệt. Chỉ cần 1 người duyệt là đủ để chuyển tiếp!",
+                            "status", "PROCESSING",
+                            "requestId", requestId,
+                            "currentStep", currentStepOrder,
+                            "approvedCount", approvedCount,
+                            "totalCount", totalCount,
+                            "approvedNames", approvedNames
+                    );
+                }
+            } else {
+                // Conditional: cần TẤT CẢ duyệt
+                isStepCompleted = totalCount > 0 && approvedCount == totalCount;
+                log.info("Conditional mode (incoming) - Approved: {}/{}, Completed: {}", approvedCount, totalCount, isStepCompleted);
+
+                if (!isStepCompleted) {
+                    String message = "Đã ghi nhận duyệt của " + String.join(", ", approvedNames) +
+                            ". Chờ thêm " + String.join(", ", pendingNames) + " duyệt.";
+                    log.info(message);
+                    return Map.of(
+                            "message", message,
+                            "status", "PROCESSING",
+                            "requestId", requestId,
+                            "currentStep", currentStepOrder,
+                            "approvedCount", approvedCount,
+                            "totalCount", totalCount,
+                            "approvedNames", approvedNames,
+                            "pendingNames", pendingNames
+                    );
+                }
+            }
+
+            // === TÌM NODE TIẾP THEO ===
             String nextNodeId = null;
-            for (int i = 0; i < edges.size(); i++) {
-                JsonNode edge = edges.get(i);
+            for (JsonNode edge : edges) {
                 String source = edge.get("source").asText();
                 if (source.equals(currentNodeId)) {
                     nextNodeId = edge.get("target").asText();
-                    log.info("Found matching edge: {} -> {}", source, nextNodeId);
+                    log.info("Found outgoing edge: {} -> {}", source, nextNodeId);
                     break;
                 }
             }
@@ -642,11 +629,11 @@ public class ApprovalWorkflowService {
                 return Map.of(
                         "message", "Yêu cầu đã được duyệt hoàn tất!",
                         "status", "APPROVED",
-                        "requestId", requestId
+                        "requestId", requestId,
+                        "approvedByAll", approvedNames
                 );
             }
 
-            // Tìm node tiếp theo
             JsonNode nextNode = findNodeById(nodes, nextNodeId);
             if (nextNode == null) {
                 log.error("Next node not found: {}", nextNodeId);
@@ -656,150 +643,138 @@ public class ApprovalWorkflowService {
             JsonNode data = nextNode.get("data");
             String nodeType = data.get("label").asText();
             String assignedRole = data.has("assignedRole") ? data.get("assignedRole").asText() : "";
+            boolean isEndNode = "END".equals(nodeType);
 
             log.info("Next node: id={}, type={}, role={}", nextNodeId, nodeType, assignedRole);
 
-            // Xử lý END node
-            if ("END".equals(nodeType)) {
-                if (assignedRole != null && !assignedRole.isEmpty()) {
-                    log.info("Creating action for END node role: {}", assignedRole);
-
-                    List<Users> approvers = getApproversByRole(request.getCompanyId(), assignedRole);
-                    int newStepOrder = currentStepOrder + 1;
-
-                    if (approvers.isEmpty()) {
-                        log.warn("⚠️ No approver found for role: {}", assignedRole);
-                        request.setStatus("APPROVED");
-                        request.setWorkflowStatus("COMPLETED");
-                        request.setUpdatedAt(OffsetDateTime.now());
-                        requestRepository.save(request);
-
-                        return Map.of(
-                                "message", "Yêu cầu đã được duyệt hoàn tất!",
-                                "status", "APPROVED",
-                                "requestId", requestId
-                        );
-                    }
-
-                    List<ApprovalAction> newActions = new ArrayList<>();
-                    for (Users approver : approvers) {
-                        ApprovalAction newAction = ApprovalAction.builder()
-                                .requestId(requestId)
-                                .stepOrder(newStepOrder)
-                                .stepName(assignedRole)
-                                .approverId(approver.getUserId())
-                                .approverName(approver.getName())
-                                .approvalType("SINGLE")
-                                .action("PENDING")
-                                .actionStatus("PENDING")
-                                .nodeId(nextNodeId)
-                                .possibleActions("conditional")
-                                .build();
-                        newActions.add(newAction);
-                        log.info("✅ Created action for END node: role={}, approver={}, stepOrder={}",
-                                assignedRole, approver.getName(), newStepOrder);
-                    }
-
-                    actionRepository.saveAll(newActions);
-                    log.info("✅ Saved {} actions for END node", newActions.size());
-
-                    request.setCurrentNodeId(nextNodeId);
-                    request.setCurrentStepOrder(newStepOrder);
-                    request.setUpdatedAt(OffsetDateTime.now());
-                    requestRepository.save(request);
-
-                    return Map.of(
-                            "message", "Đã duyệt thành công. Chuyển sang bước duyệt: " + assignedRole,
-                            "status", "IN_PROGRESS",
-                            "requestId", requestId,
-                            "currentStep", currentStepOrder,
-                            "nextStep", newStepOrder,
-                            "nextStepName", assignedRole
-                    );
-                } else {
-                    request.setStatus("APPROVED");
-                    request.setWorkflowStatus("COMPLETED");
-                    request.setUpdatedAt(OffsetDateTime.now());
-                    requestRepository.save(request);
-
-                    return Map.of(
-                            "message", "Yêu cầu đã được duyệt hoàn tất!",
-                            "status", "APPROVED",
-                            "requestId", requestId
-                    );
-                }
-            }
-
-            // Xử lý APPROVAL node
-            if ("APPROVAL".equals(nodeType)) {
-                if (assignedRole == null || assignedRole.isEmpty()) {
-                    throw new RuntimeException("APPROVAL node không có role được gán");
-                }
-
-                List<Users> approvers = getApproversByRole(request.getCompanyId(), assignedRole);
-                int newStepOrder = currentStepOrder + 1;
-
-                if (approvers.isEmpty()) {
-                    log.warn("⚠️ No approver for role: {}", assignedRole);
-                    ApprovalAction dummyAction = ApprovalAction.builder()
-                            .requestId(requestId)
-                            .stepOrder(newStepOrder)
-                            .stepName(assignedRole)
-                            .approvalType("SINGLE")
-                            .action("SKIPPED")
-                            .actionStatus("SKIPPED")
-                            .nodeId(nextNodeId)
-                            .build();
-                    actionRepository.save(dummyAction);
-                    return handleApprovalAndMoveToNext(dummyAction, request, workflow);
-                }
-
-                List<ApprovalAction> newActions = new ArrayList<>();
-                for (Users approver : approvers) {
-                    ApprovalAction newAction = ApprovalAction.builder()
-                            .requestId(requestId)
-                            .stepOrder(newStepOrder)
-                            .stepName(assignedRole)
-                            .approverId(approver.getUserId())
-                            .approverName(approver.getName())
-                            .approvalType("SINGLE")
-                            .action("PENDING")
-                            .actionStatus("PENDING")
-                            .nodeId(nextNodeId)
-                            .possibleActions("conditional")
-                            .build();
-                    newActions.add(newAction);
-                    log.info("✅ Created action for role: {}, approver: {}, stepOrder: {}",
-                            assignedRole, approver.getName(), newStepOrder);
-                }
-
-                actionRepository.saveAll(newActions);
-
-                request.setCurrentNodeId(nextNodeId);
-                request.setCurrentStepOrder(newStepOrder);
+            // Nếu là END node và không có role thì kết thúc
+            if (isEndNode && (assignedRole == null || assignedRole.isEmpty())) {
+                request.setStatus("APPROVED");
+                request.setWorkflowStatus("COMPLETED");
                 request.setUpdatedAt(OffsetDateTime.now());
                 requestRepository.save(request);
 
                 return Map.of(
-                        "message", "Đã duyệt thành công. Chuyển sang bước tiếp theo: " + assignedRole,
-                        "status", "IN_PROGRESS",
+                        "message", "Yêu cầu đã được duyệt hoàn tất!",
+                        "status", "APPROVED",
                         "requestId", requestId,
-                        "currentStep", currentStepOrder,
-                        "nextStep", newStepOrder,
-                        "nextStepName", assignedRole
+                        "approvedByAll", approvedNames
                 );
             }
 
+            // Xác định possibleActions cho node tiếp theo (dựa trên incoming edge của node đó)
+            List<String> nextPossibleActions = getPossibleActionsForNodeByIncoming(nextNodeId, edges);
+            String possibleActionsStr = String.join(",", nextPossibleActions);
+            log.info("Next node possible actions: {}", possibleActionsStr);
+
+            int newStepOrder = currentStepOrder + 1;
+
+            // Tạo action cho node tiếp theo
+            List<Users> approvers = getApproversByRole(request.getCompanyId(), assignedRole);
+            if (approvers.isEmpty()) {
+                log.warn("⚠️ No approver found for role: {}", assignedRole);
+                request.setStatus("APPROVED");
+                request.setWorkflowStatus("COMPLETED");
+                request.setUpdatedAt(OffsetDateTime.now());
+                requestRepository.save(request);
+
+                return Map.of(
+                        "message", "Yêu cầu đã được duyệt hoàn tất!",
+                        "status", "APPROVED",
+                        "requestId", requestId
+                );
+            }
+
+            List<ApprovalAction> newActions = new ArrayList<>();
+            for (Users approver : approvers) {
+                ApprovalAction newAction = ApprovalAction.builder()
+                        .requestId(requestId)
+                        .stepOrder(newStepOrder)
+                        .stepName(assignedRole)
+                        .approverId(approver.getUserId())
+                        .approverName(approver.getName())
+                        .approvalType("SINGLE")
+                        .action("PENDING")
+                        .actionStatus("PENDING")
+                        .nodeId(nextNodeId)
+                        .possibleActions(possibleActionsStr)
+                        .build();
+                newActions.add(newAction);
+                log.info("✅ Created action for node: role={}, approver={}, stepOrder={}",
+                        assignedRole, approver.getName(), newStepOrder);
+            }
+
+            actionRepository.saveAll(newActions);
+            log.info("✅ Saved {} actions for step {}", newActions.size(), newStepOrder);
+
+            request.setCurrentNodeId(nextNodeId);
+            request.setCurrentStepOrder(newStepOrder);
+            request.setUpdatedAt(OffsetDateTime.now());
+            requestRepository.save(request);
+
             return Map.of(
-                    "message", "Đã duyệt thành công",
-                    "status", "IN_PROGRESS",
-                    "requestId", requestId
+                    "message", isEndNode ? "Đã duyệt thành công. Hoàn thành quy trình!" : "Đã duyệt thành công. Chuyển sang bước tiếp theo: " + assignedRole,
+                    "status", isEndNode ? "APPROVED" : "IN_PROGRESS",
+                    "requestId", requestId,
+                    "currentStep", currentStepOrder,
+                    "nextStep", newStepOrder,
+                    "nextStepName", assignedRole,
+                    "approvedByAll", approvedNames
             );
 
         } catch (Exception e) {
             log.error("Error in handleApprovalAndMoveToNext: {}", e.getMessage(), e);
             throw new RuntimeException("Lỗi xử lý duyệt: " + e.getMessage());
         }
+    }
+
+    /**
+     * Lấy loại kết nối từ edge đi VÀO node (từ node cha)
+     */
+    private String getIncomingConnectionType(String nodeId, JsonNode edges) {
+        for (JsonNode edge : edges) {
+            String target = edge.get("target").asText();
+            if (target.equals(nodeId)) {
+                if (edge.has("data") && edge.get("data").has("type")) {
+                    String edgeType = edge.get("data").get("type").asText();
+                    log.info("Incoming edge to {} has type: {}", nodeId, edgeType);
+                    return edgeType;
+                }
+            }
+        }
+        log.info("No incoming edge found for node {}, defaulting to conditional", nodeId);
+        return "conditional";
+    }
+
+    /**
+     * Lấy possible actions cho node dựa trên edge đi VÀO (từ node cha)
+     */
+    private List<String> getPossibleActionsForNodeByIncoming(String nodeId, JsonNode edges) {
+        List<String> actions = new ArrayList<>();
+
+        for (JsonNode edge : edges) {
+            String target = edge.get("target").asText();
+            if (target.equals(nodeId)) {
+                if (edge.has("data") && edge.get("data").has("type")) {
+                    String edgeType = edge.get("data").get("type").asText();
+                    if ("conditional".equals(edgeType)) {
+                        actions.add("Đồng ý");
+                    } else if ("parallel".equals(edgeType)) {
+                        actions.add("Đồng ý (Song song)");
+                    } else if ("reject".equals(edgeType)) {
+                        actions.add("Từ chối");
+                    }
+                }
+            }
+        }
+
+        if (actions.isEmpty()) {
+            actions.add("Đồng ý");
+            actions.add("Từ chối");
+        }
+
+        log.info("Possible actions for node {} (by incoming): {}", nodeId, actions);
+        return actions;
     }
 
     private JsonNode findNodeById(JsonNode nodes, String nodeId) {
@@ -826,15 +801,11 @@ public class ApprovalWorkflowService {
         Users user = userRepository.findById(userId)
                 .orElseThrow(() -> new RuntimeException("Không tìm thấy người dùng"));
 
-        log.info("Getting requests for user: {} (position: {})", user.getName(), user.getPosition());
-
         List<ApprovalRequest> requests = requestRepository.findRequestsByApproverRole(
                 user.getCompanyId(),
                 user.getPosition(),
                 userId
         );
-
-        log.info("Found {} requests", requests.size());
 
         return requests.stream()
                 .map(request -> convertToResponseDTO(request, userId))
@@ -873,119 +844,45 @@ public class ApprovalWorkflowService {
     public Workflow getActiveWorkflowByCompanyAndName(UUID companyId, String name) {
         return getActiveWorkflow(companyId, name);
     }
+
     public ApprovalRequest getRequestById(UUID requestId) {
         return requestRepository.findById(requestId)
                 .orElseThrow(() -> new RuntimeException("Không tìm thấy yêu cầu"));
     }
 
-    /**
-     * Cập nhật yêu cầu (khi bị yêu cầu chỉnh sửa)
-     */
     @Transactional
     public ApprovalResponseDTO updateRequest(UUID requestId, UpdateApprovalRequestDTO updateDTO) {
         log.info("Updating request: id={}", requestId);
 
-        // Tìm request
         ApprovalRequest request = requestRepository.findById(requestId)
                 .orElseThrow(() -> new RuntimeException("Không tìm thấy yêu cầu"));
 
-        // Kiểm tra trạng thái
         if (!"REQUEST_CHANGES".equals(request.getStatus())) {
             throw new RuntimeException("Chỉ có thể chỉnh sửa yêu cầu khi đang ở trạng thái yêu cầu chỉnh sửa");
         }
 
-        // Cập nhật thông tin
-        if (updateDTO.getTitle() != null) {
-            request.setTitle(updateDTO.getTitle());
-        }
-        if (updateDTO.getDescription() != null) {
-            request.setDescription(updateDTO.getDescription());
-        }
-        if (updateDTO.getRequestType() != null) {
-            request.setRequestType(updateDTO.getRequestType());
-        }
-        if (updateDTO.getNote() != null) {
-            request.setNote(updateDTO.getNote());
-        }
+        if (updateDTO.getTitle() != null) request.setTitle(updateDTO.getTitle());
+        if (updateDTO.getDescription() != null) request.setDescription(updateDTO.getDescription());
+        if (updateDTO.getRequestType() != null) request.setRequestType(updateDTO.getRequestType());
+        if (updateDTO.getNote() != null) request.setNote(updateDTO.getNote());
 
-        // Chuyển trạng thái về PENDING để gửi lại duyệt
         request.setStatus("PENDING");
         request.setWorkflowStatus("IN_PROGRESS");
         request.setUpdatedAt(OffsetDateTime.now());
-
         requestRepository.save(request);
-        log.info("✅ Request updated and status changed to PENDING: {}", requestId);
 
-        // Lấy lại thông tin action hiện tại (bước đang chờ)
-        // Cần tạo lại action cho bước đã bị REQUEST_CHANGES
-        // Hoặc kích hoạt lại action cũ
-
-        // Cách 1: Tìm action có action = "REQUEST_CHANGES" và chuyển thành "PENDING"
         List<ApprovalAction> actions = actionRepository.findByRequestIdOrderByStepOrderAsc(requestId);
         for (ApprovalAction action : actions) {
             if ("REQUEST_CHANGES".equals(action.getAction())) {
                 action.setAction("PENDING");
                 action.setActionStatus("PENDING");
-                action.setRejectionReason(null); // Xóa lý do cũ
+                action.setRejectionReason(null);
                 actionRepository.save(action);
                 log.info("✅ Reactivated action for step: {}", action.getStepOrder());
                 break;
             }
         }
 
-        // Cách 2: Nếu không tìm thấy action REQUEST_CHANGES, tìm action PENDING đầu tiên
-        ApprovalAction pendingAction = actions.stream()
-                .filter(a -> "PENDING".equals(a.getAction()))
-                .findFirst()
-                .orElse(null);
-
-        if (pendingAction == null) {
-            // Nếu không có action PENDING nào, tạo mới từ workflow
-            Workflow workflow = workflowRepository.findById(request.getWorkflowId())
-                    .orElseThrow(() -> new RuntimeException("Không tìm thấy workflow"));
-
-            try {
-                JsonNode nodes = objectMapper.readTree(workflow.getNodes());
-                JsonNode edges = objectMapper.readTree(workflow.getEdges());
-
-                Map<String, String> emptyActions = new HashMap<>();
-                Map<String, ApprovalDetail> emptyDetails = new HashMap<>();
-
-                // Parse lại workflow để lấy steps
-                List<WorkflowStep> steps = parseWorkflowSteps(nodes, edges, emptyActions, emptyDetails);
-
-                // Tìm step đầu tiên (stepOrder = 1)
-                WorkflowStep firstStep = steps.stream()
-                        .filter(s -> s.getStepOrder() == 1)
-                        .findFirst()
-                        .orElse(null);
-
-                if (firstStep != null) {
-                    List<Users> approvers = getApproversByRole(request.getCompanyId(), firstStep.getAssignedRole());
-                    for (Users approver : approvers) {
-                        ApprovalAction newAction = ApprovalAction.builder()
-                                .requestId(requestId)
-                                .stepOrder(firstStep.getStepOrder())
-                                .stepName(firstStep.getStepName())
-                                .approverId(approver.getUserId())
-                                .approverName(approver.getName())
-                                .approvalType(firstStep.getApprovalType())
-                                .action("PENDING")
-                                .actionStatus("PENDING")
-                                .nodeId(firstStep.getNodeId())
-                                .possibleActions(String.join(",", firstStep.getPossibleActions()))
-                                .build();
-                        actionRepository.save(newAction);
-                        log.info("✅ Created new action for step: {}", firstStep.getStepOrder());
-                    }
-                }
-            } catch (Exception e) {
-                log.error("Error recreating actions: {}", e.getMessage(), e);
-                throw new RuntimeException("Lỗi tạo lại luồng duyệt: " + e.getMessage());
-            }
-        }
-
-        // Chuyển về trang chi tiết
         return convertToResponseDTO(request, request.getRequesterId());
     }
 }
